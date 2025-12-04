@@ -16,7 +16,6 @@ def validar_codigo(codigo):
     if codigo is None:
         return False
     codigo = codigo.strip()
-    # Valida UUID do SIGEF
     padrao_uuid = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     return re.match(padrao_uuid, codigo.lower()) is not None
 
@@ -46,13 +45,22 @@ options.add_experimental_option("useAutomationExtension", False)
 options.add_argument("--disable-blink-features=AutomationControlled")
 options.add_experimental_option("detach", True)
 
-# === INICIA O CHROME ===
-service = Service(ChromeDriverManager().install())
+# === INICIA O CHROME COM FALLBACK ===
+try:
+    # tenta pegar a versão exata do Chrome do usuário
+    driver_path = ChromeDriverManager().install()
+except:
+    # fallback para Chrome antigo (Win7 / versões desatualizadas)
+    print("⚠ Chrome desatualizado detectado — usando ChromeDriver 109")
+    driver_path = ChromeDriverManager(version="109.0.5414.74").install()
+
+service = Service(driver_path)
 driver = webdriver.Chrome(service=service, options=options)
 driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
 wait = WebDriverWait(driver, 30)
 driver.get(url)
-time.sleep(5)
+time.sleep(9)
 
 # === ABRE DROPDOWN DE CAMADAS ===
 wait.until(EC.element_to_be_clickable((By.CLASS_NAME, 'btn-busca-camada'))).click()
@@ -65,10 +73,11 @@ for grupo in driver.find_elements(By.CLASS_NAME, 'toggle-subnivel'):
         time.sleep(1)
         break
 
-# === CLICA NA CAMADA SIGEF - CERTIFICAÇÃO ===
+# === CLICA NA CAMADA DO SIGEF ===
 try:
     camadas = wait.until(EC.presence_of_all_elements_located(
         (By.XPATH, f"//div[@class='dropdown-item' and @data-camada='{data_camada}']")))
+
     for camada in camadas:
         if camada.is_displayed():
             driver.execute_script("arguments[0].scrollIntoView(true);", camada)
@@ -78,7 +87,7 @@ try:
 except Exception as e:
     print(f"Erro ao clicar na camada '{data_camada}':", e)
 
-# === BUSCA O CÓDIGO NO CAMPO ===
+# === BUSCA O CÓDIGO ===
 input_codigo = wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'geocoder-control-input')))
 input_codigo.clear()
 input_codigo.send_keys(codigo)
@@ -108,11 +117,10 @@ except Exception as e:
 
 # === Janela popup final ===
 root = tk.Tk()
-root.withdraw()                      # Oculta a janela principal
-root.attributes("-topmost", True)    # Garante que o messagebox fique na frente
+root.withdraw()
+root.attributes("-topmost", True)
 messagebox.showinfo("Concluído", "Consulta Finalizada\nVocê pode fechar o navegador quando quiser.")
 root.destroy()
-
 
 # === Mantém navegador aberto ===
 try:
