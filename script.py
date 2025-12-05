@@ -13,18 +13,22 @@ import sys
 import re
 
 def validar_codigo(codigo):
+    """Valida se o código fornecido é um UUID (padrão SIGEF)."""
     if codigo is None:
         return False
     codigo = codigo.strip()
+    # Padrão UUID v4
     padrao_uuid = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     return re.match(padrao_uuid, codigo.lower()) is not None
 
 # === Obtem código por argumento ou input ===
+# Cria a instância principal do Tkinter (oculta) para uso com simpledialog/messagebox
+root = tk.Tk()
+root.withdraw()
+
 if len(sys.argv) > 1:
     codigo = sys.argv[1]
 else:
-    root = tk.Tk()
-    root.withdraw()
     codigo = simpledialog.askstring("Código SIGEF", "Digite o código SIGEF (ex: 4c5b03c8-e43a-4f22-a10e-0dc33ad20044):")
 
 if not validar_codigo(codigo):
@@ -40,41 +44,49 @@ grupo_nome = 'Imóveis Rurais'
 # === OPÇÕES DO CHROME ===
 options = webdriver.ChromeOptions()
 options.add_argument("--start-maximized")
+# Opções para evitar que o site detecte o Selenium/automação
 options.add_experimental_option("excludeSwitches", ["enable-automation"])
 options.add_experimental_option("useAutomationExtension", False)
 options.add_argument("--disable-blink-features=AutomationControlled")
+# Mantém a janela do Chrome aberta após a conclusão do script
 options.add_experimental_option("detach", True)
 
-# === INICIA O CHROME COM FALLBACK ===
+# === INICIA O CHROME COM O DRIVER MANAGER PADRÃO (Compatível com versões antigas) ===
 try:
-    # tenta pegar a versão exata do Chrome do usuário
-    driver_path = ChromeDriverManager().install()
-except:
-    # fallback para Chrome antigo (Win7 / versões desatualizadas)
-    print("⚠ Chrome desatualizado detectado — usando ChromeDriver 109")
-    driver_path = ChromeDriverManager(version="109.0.5414.74").install()
+    # Removido 'force_install=True' para resolver o erro 'unexpected keyword argument'.
+    # O ChromeDriverManager() agora usará o método padrão para verificar e instalar o driver.
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+    
+    # Executa script anti-automação após o driver iniciar
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-service = Service(driver_path)
-driver = webdriver.Chrome(service=service, options=options)
-driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+except Exception as e:
+    print(f"❌ Erro fatal ao iniciar o navegador Chrome. Detalhes: {e}")
+    messagebox.showerror(
+        "Erro de Inicialização", 
+        "Falha ao iniciar o navegador Chrome.\nVerifique se o Google Chrome está instalado e atualizado.\nDetalhes técnicos: " + str(e)
+    )
+    root.destroy()
+    sys.exit(1)
 
 wait = WebDriverWait(driver, 30)
 driver.get(url)
-time.sleep(9)
+time.sleep(9) # Tempo para carregamento inicial da página e do mapa
 
 # === ABRE DROPDOWN DE CAMADAS ===
-wait.until(EC.element_to_be_clickable((By.CLASS_NAME, 'btn-busca-camada'))).click()
-time.sleep(1)
-
-# === EXPANDE O GRUPO DE CAMADAS ===
-for grupo in driver.find_elements(By.CLASS_NAME, 'toggle-subnivel'):
-    if grupo_nome.lower() in grupo.text.lower():
-        driver.execute_script("arguments[0].click();", grupo)
-        time.sleep(1)
-        break
-
-# === CLICA NA CAMADA DO SIGEF ===
 try:
+    wait.until(EC.element_to_be_clickable((By.CLASS_NAME, 'btn-busca-camada'))).click()
+    time.sleep(1)
+
+    # === EXPANDE O GRUPO DE CAMADAS ===
+    for grupo in driver.find_elements(By.CLASS_NAME, 'toggle-subnivel'):
+        if grupo_nome.lower() in grupo.text.lower():
+            driver.execute_script("arguments[0].click();", grupo)
+            time.sleep(1)
+            break
+
+    # === CLICA NA CAMADA DO SIGEF ===
     camadas = wait.until(EC.presence_of_all_elements_located(
         (By.XPATH, f"//div[@class='dropdown-item' and @data-camada='{data_camada}']")))
 
@@ -85,14 +97,17 @@ try:
             driver.execute_script("arguments[0].click();", camada)
             break
 except Exception as e:
-    print(f"Erro ao clicar na camada '{data_camada}':", e)
+    print(f"Erro ao interagir com as camadas do mapa:", e)
 
 # === BUSCA O CÓDIGO ===
-input_codigo = wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'geocoder-control-input')))
-input_codigo.clear()
-input_codigo.send_keys(codigo)
-input_codigo.send_keys(Keys.ENTER)
-time.sleep(2)
+try:
+    input_codigo = wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'geocoder-control-input')))
+    input_codigo.clear()
+    input_codigo.send_keys(codigo)
+    input_codigo.send_keys(Keys.ENTER)
+    time.sleep(2)
+except Exception as e:
+    print("Erro ao inserir o código de busca:", e)
 
 # === CLICA NA SUGESTÃO ===
 try:
@@ -101,33 +116,40 @@ try:
     )
     sugestao.click()
 except:
+    # Não é um erro crítico se a sugestão não aparecer ou for clicada
+    print("Sugestão de busca não encontrada ou não clicada, prosseguindo...")
     pass
 
-# === CLICA NO CENTRO DA TELA ===
+# === CLICA NO CENTRO DA TELA PARA ATIVAR O POPUP DE INFORMAÇÃO ===
 time.sleep(8)
 try:
     width = driver.execute_script("return window.innerWidth")
     height = driver.execute_script("return window.innerHeight")
     center_x = width // 2
     center_y = height // 2
+    
+    # Clica no centro
     ActionChains(driver).move_by_offset(center_x, center_y).click().perform()
+    # Retorna o cursor para evitar interferência na tela
     ActionChains(driver).move_by_offset(-center_x, -center_y).perform()
+    
+    time.sleep(3) # Tempo para o popup aparecer
+    
 except Exception as e:
     print("Erro ao clicar no centro da tela:", e)
 
 # === Janela popup final ===
-root = tk.Tk()
-root.withdraw()
+# Reutilizando a instância 'root' já criada e oculta
 root.attributes("-topmost", True)
-messagebox.showinfo("Concluído", "Consulta Finalizada\nVocê pode fechar o navegador quando quiser.")
+messagebox.showinfo("Concluído", "Consulta Finalizada\nO mapa com o código SIGEF foi carregado e o popup de informações deve estar visível.\nVocê pode fechar o navegador quando quiser.")
 root.destroy()
 
 # === Mantém navegador aberto ===
+# O navegador permanecerá aberto devido à opção "detach", mas este loop garante que o script não morra imediatamente
 try:
-    while True:
-        if driver.window_handles:
-            time.sleep(1)
-        else:
-            break
+    while driver.window_handles:
+        time.sleep(1)
 except:
     pass
+
+sys.exit(0)
